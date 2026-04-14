@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>年刊（卡牌堆疊滑動）</title>
+  <title>年刊</title>
 
   <style>
     :root{
@@ -14,9 +14,9 @@
       --r: 14px;
       --shadow: 0 18px 55px rgba(0,0,0,.18);
 
-      --stackX: 10px;
-      --stackY: 10px;
-      --stackScale: 0.985;
+      --stackX: 0px;
+      --stackY: 0px;
+      --stackScale: 1;
     }
 
     *{ box-sizing:border-box; }
@@ -182,7 +182,7 @@
     // ========================
 
     const DURATION = 260;   // 拖曳放手後動畫時間
-    const HOME_STEP_MS = 60; // 方案A：回第一頁速度（越細越快，40~90 建議）
+    const HOME_STEP_MS = 40; // 方案A：回第一頁速度（越細越快，40~90 建議）
 
     const pages = Array.from({length: pageCount}, (_, i) => `assets/P${String(i).padStart(2,'0')}.jpg`);
 
