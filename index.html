@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>年刊（卡牌堆疊滑動）</title>
+
+  <style>
+    :root{
+      --bg:#f2f2f2;
+      --pad:14px;
+      --ratio: 0.7071;  /* 寬/高；載入P00後自動更新 */
+
+      --r: 14px;
+      --shadow: 0 18px 55px rgba(0,0,0,.18);
+      --border: 1px solid rgba(0,0,0,.10);
+
+      --stackX: 0px;
+      --stackY: 0px;
+      --stackScale: 1;
+    }
+
+    *{ box-sizing:border-box; }
+    html, body{
+      height:100%;
+      margin:0;
+      overflow:hidden;
+      background: var(--bg);
+      font-family: system-ui, -apple-system, "Noto Sans TC", "Segoe UI", Arial, sans-serif;
+    }
+
+    #loading{
+      position: fixed;
+      inset: 0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      background: var(--bg);
+      z-index: 99999;
+      color:#333;
+    }
+
+    #app{
+      height:100svh;
+      width:100vw;
+      position:relative;
+    }
+
+    #toolbar{
+      position: fixed;
+      top: calc(12px + env(safe-area-inset-top));
+      right: calc(12px + env(safe-area-inset-right));
+      z-index: 9999;
+      display:flex;
+      gap:8px;
+      align-items:center;
+    }
+    #toolbar button, #toolbar a{
+      appearance:none;
+      border:1px solid rgba(0,0,0,.15);
+      background: rgba(255,255,255,.92);
+      color:#111;
+      padding:8px 10px;
+      border-radius:10px;
+      font-size:14px;
+      cursor:pointer;
+      text-decoration:none;
+      line-height:1;
+      user-select:none;
+    }
+    #btnExit{ display:none; }
+
+    #pager{
+      position: fixed;
+      left: calc(12px + env(safe-area-inset-left));
+      bottom: calc(12px + env(safe-area-inset-bottom));
+      z-index: 9999;
+      font-size: 13px;
+      color: rgba(0,0,0,.65);
+      background: rgba(255,255,255,.88);
+      border: 1px solid rgba(0,0,0,.10);
+      padding: 6px 10px;
+      border-radius: 999px;
+      backdrop-filter: blur(8px);
+      user-select: none;
+    }
+
+    #stage{
+      position:absolute;
+      inset:0;
+      display:grid;
+      place-items:center;
+      padding: var(--pad);
+      touch-action: none;
+    }
+
+    #deck{
+      height: calc(100svh - (var(--pad) * 2));
+      width: min(
+        calc((100svh - (var(--pad) * 2)) * var(--ratio)),
+        calc(100vw - (var(--pad) * 2))
+      );
+      position: relative;
+      border-radius: var(--r);
+    }
+
+    .card{
+      position:absolute;
+      inset:0;
+      border-radius: var(--r);
+      overflow:hidden;
+      background:transparent;
+      border: var(--border);
+      box-shadow: var(--shadow);
+      transform-origin: center;
+      will-change: transform, opacity;
+    }
+    .card img{
+      width:100%;
+      height:100%;
+      object-fit: contain;
+      display:block;
+      background:transparent;
+      pointer-events:none;
+    }
+
+    .card.under{
+      box-shadow: 0 10px 30px rgba(0,0,0,.12);
+      transform: translate(var(--stackX), var(--stackY)) scale(var(--stackScale));
+      opacity: 0.95;
+    }
+    .card.under2{
+      transform: translate(calc(var(--stackX) * 2), calc(var(--stackY) * 2)) scale(calc(var(--stackScale) - 0.01));
+      opacity: 0.85;
+      box-shadow: 0 8px 24px rgba(0,0,0,.10);
+    }
+
+    .card.top{
+      cursor: grab;
+    }
+    .card.top:active{
+      cursor: grabbing;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="loading">載入中…</div>
+
+  <div id="app">
+    <div id="toolbar">
+      <a id="pdfLink" href="#" target="_blank" rel="noopener noreferrer">PDF</a>
+      <button id="btnFull" type="button">全螢幕</button>
+      <button id="btnExit" type="button">退出</button>
+    </div>
+
+    <div id="pager">1 / 36</div>
+
+    <div id="stage">
+      <div id="deck"></div>
+    </div>
+  </div>
+
+  <script>
+    // ===== 你只要改這裡 =====
+    const PDF_URL = "https://drive.google.com/file/d/1qyQIyknB_kAufkdjcSySj9qNIhB1JbVG/view?usp=sharing";
+    const pageCount = 36; // P00~P35
+    // ========================
+
+    const DURATION = 260; // ms
+
+    const pages = Array.from({length: pageCount}, (_, i) => `assets/P${String(i).padStart(2,'0')}.jpg`);
+
+    const loading = document.getElementById('loading');
+    const deck = document.getElementById('deck');
+    const pager = document.getElementById('pager');
+    const pdfLink = document.getElementById('pdfLink');
+    const btnFull = document.getElementById('btnFull');
+    const btnExit = document.getElementById('btnExit');
+    const app = document.getElementById('app');
+
+    pdfLink.href = PDF_URL;
+
+    let idx = 0;
+    let animating = false;
+    let dragging = false;
+
+    const elUnder2 = makeCard('under2');
+    const elUnder  = makeCard('under');
+    const elTop    = makeCard('top');
+    deck.appendChild(elUnder2);
+    deck.appendChild(elUnder);
+    deck.appendChild(elTop);
+
+    function makeCard(cls){
+      const div = document.createElement('div');
+      div.className = `card ${cls}`;
+      const img = document.createElement('img');
+      img.alt = '';
+      img.decoding = 'async';
+      div.appendChild(img);
+      return div;
+    }
+    function setSrc(el, src){ el.querySelector('img').src = src; }
+    function clamp(n,a,b){ return Math.max(a, Math.min(b,n)); }
+
+    function setPager(){ pager.textContent = `${idx+1} / ${pageCount}`; }
+
+    function preload(i){
+      if (i<0 || i>=pageCount) return;
+      const im = new Image();
+      im.src = pages[i];
+    }
+
+    async function setRatioFromFirst(){
+      await new Promise((resolve)=>{
+        const im = new Image();
+        im.onload = ()=> {
+          if (im.naturalWidth && im.naturalHeight){
+            document.documentElement.style.setProperty('--ratio', (im.naturalWidth/im.naturalHeight).toString());
+          }
+          resolve();
+        };
+        im.onerror = ()=>resolve();
+        im.src = pages[0];
+      });
+    }
+
+    function renderStatic(){
+      setSrc(elTop, pages[idx]);
+      setSrc(elUnder, pages[Math.min(idx+1, pageCount-1)]);
+      setSrc(elUnder2, pages[Math.min(idx+2, pageCount-1)]);
+
+      elTop.style.transition = 'none';
+      elTop.style.transform = 'translate(0px,0px) rotate(0deg)';
+      elTop.style.opacity = '1';
+
+      elUnder.style.transition = 'none';
+      elUnder2.style.transition = 'none';
+      elUnder.style.opacity = '0.95';
+      elUnder2.style.opacity = '0.85';
+
+      setPager();
+      preload(idx+1); preload(idx+2); preload(idx-1); preload(idx-2);
+    }
+
+    // ========== 動畫：從「當前拖曳位置」續播 ==========
+    function finishNextFrom(dx){
+      if (animating || idx >= pageCount-1) return;
+      animating = true;
+
+      const w = deck.clientWidth || 1;
+
+      // top 已在你拖的位置，直接續播到左側飛出
+      elTop.style.transition = `transform ${DURATION}ms ease, opacity ${DURATION}ms ease`;
+      elTop.style.transform  = `translate(${-w*1.15}px, -10px) rotate(-10deg)`;
+      elTop.style.opacity = '0';
+
+      setTimeout(()=>{
+        idx++;
+        renderStatic();
+        animating = false;
+      }, DURATION + 20);
+    }
+
+    function finishPrevFrom(dx){
+      if (animating || idx <= 0) return;
+      animating = true;
+
+      // prev 手勢：top 是上一頁，且已從左側被你拉出一段
+      // 直接續播到中心 (0,0)
+      elTop.style.transition = `transform ${DURATION}ms ease`;
+      elTop.style.transform  = 'translate(0px,0px) rotate(0deg)';
+
+      setTimeout(()=>{
+        idx--;
+        renderStatic();
+        animating = false;
+      }, DURATION + 20);
+    }
+
+    function bounceBackNext(){
+      elTop.style.transition = `transform 200ms ease`;
+      elTop.style.transform  = 'translate(0px,0px) rotate(0deg)';
+    }
+
+    function bounceBackPrev(){
+      const w = deck.clientWidth || 1;
+      // 把上一頁滑回左側外面，然後回復靜態（顯示當前頁）
+      elTop.style.transition = `transform 200ms ease`;
+      elTop.style.transform  = `translate(${-w*1.15}px, -10px) rotate(-10deg)`;
+      setTimeout(()=> renderStatic(), 210);
+    }
+
+    // ========== 拖曳交互 ==========
+    let startX = 0, startY = 0;
+    let mode = null; // 'next' | 'prev'
+    let lastDx = 0;
+
+    function setMode(newMode){
+      if (mode === newMode) return;
+      mode = newMode;
+
+      const w = deck.clientWidth || 1;
+
+      if (mode === 'next'){
+        // top=當前、under=下一頁
+        setSrc(elTop, pages[idx]);
+        setSrc(elUnder, pages[Math.min(idx+1, pageCount-1)]);
+        setSrc(elUnder2, pages[Math.min(idx+2, pageCount-1)]);
+        elTop.style.opacity = '1';
+        elTop.style.transform = 'translate(0px,0px) rotate(0deg)';
+      } else if (mode === 'prev'){
+        // under=當前；top=上一頁（放在左側外面等你拉回來）
+        setSrc(elUnder, pages[idx]);
+        setSrc(elUnder2, pages[Math.min(idx+1, pageCount-1)]);
+        setSrc(elTop, pages[Math.max(idx-1, 0)]);
+        elTop.style.opacity = '1';
+        elTop.style.transform = `translate(${-w*1.15}px, -10px) rotate(-10deg)`;
+      }
+    }
+
+    function applyDrag(dx){
+      const w = deck.clientWidth || 1;
+      const p = clamp(dx / w, -1, 1);
+
+      if (mode === 'next'){
+        const rot = p * 8;
+        const lift = Math.abs(p) * -6;
+        elTop.style.transform = `translate(${dx}px, ${lift}px) rotate(${rot}deg)`;
+      } else if (mode === 'prev'){
+        const offLeft = -w * 1.15;
+        const x = clamp(offLeft + dx, offLeft, 0);
+        const t = 1 - Math.abs(x / offLeft); // 0..1
+        const rot = (-10) * (1 - t);
+        elTop.style.transform = `translate(${x}px, -10px) rotate(${rot}deg)`;
+      }
+    }
+
+    function sideTap(clientX){
+      // 左1/3 prev, 右1/3 next, 中間不動
+      const rect = deck.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const w = rect.width;
+
+      // 點擊翻頁一樣要「順暢」，這裡直接做“無拖曳起點”的完成動畫
+      if (x < w * 0.33) {
+        // prev：上一頁從左進來
+        if (idx <= 0 || animating) return;
+        const ww = deck.clientWidth || 1;
+        setMode('prev');
+        // 讓它從左側外面開始，直接進場到中心
+        requestAnimationFrame(() => finishPrevFrom(999));
+      } else if (x > w * 0.67) {
+        if (idx >= pageCount-1 || animating) return;
+        setMode('next');
+        requestAnimationFrame(() => finishNextFrom(-999));
+      }
+    }
+
+    elTop.addEventListener('pointerdown', (e)=>{
+      if (animating) return;
+      dragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      lastDx = 0;
+      mode = null;
+
+      elTop.setPointerCapture(e.pointerId);
+      elTop.style.transition = 'none';
+      elUnder.style.transition = 'none';
+      elUnder2.style.transition = 'none';
+    });
+
+    elTop.addEventListener('pointermove', (e)=>{
+      if (!dragging || animating) return;
+      const dx = e.clientX - startX;
+      lastDx = dx;
+
+      // 邊界：第一頁不能prev、最後一頁不能next（橡皮筋）
+      if (dx > 0 && idx <= 0){
+        setMode('next');
+        applyDrag(dx * 0.25);
+        return;
+      }
+      if (dx < 0 && idx >= pageCount-1){
+        setMode('next');
+        applyDrag(dx * 0.25);
+        return;
+      }
+
+      if (dx < 0) setMode('next');
+      else if (dx > 0) setMode('prev');
+      if (!mode) return;
+
+      applyDrag(dx);
+    });
+
+    elTop.addEventListener('pointerup', (e)=>{
+      if (!dragging || animating) return;
+      dragging = false;
+
+      const dx = lastDx;
+      const dy = e.clientY - startY;
+
+      // 點擊（不是拖曳）
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+        sideTap(e.clientX);
+        mode = null;
+        return;
+      }
+
+      const w = deck.clientWidth || 1;
+      const threshold = Math.min(180, w * 0.22);
+
+      if (mode === 'next'){
+        if (dx <= -threshold) finishNextFrom(dx);
+        else bounceBackNext();
+      } else if (mode === 'prev'){
+        if (dx >= threshold) finishPrevFrom(dx);
+        else bounceBackPrev();
+      }
+
+      mode = null;
+    });
+
+    elTop.addEventListener('pointercancel', ()=>{
+      dragging = false;
+      if (!animating) renderStatic();
+      mode = null;
+    });
+
+    // 全螢幕
+    function syncFS(){
+      const on = !!document.fullscreenElement;
+      btnFull.style.display = on ? 'none' : 'inline-block';
+      btnExit.style.display = on ? 'inline-block' : 'none';
+    }
+    btnFull.addEventListener('click', async ()=>{
+      try{ await app.requestFullscreen(); }catch(e){
+        alert("全螢幕被阻擋（若在 iframe 內需 allowfullscreen/allow='fullscreen'）。");
+      }
+    });
+    btnExit.addEventListener('click', async ()=>{
+      try{ if (document.fullscreenElement) await document.exitFullscreen(); }catch(e){}
+    });
+    document.addEventListener('fullscreenchange', syncFS);
+
+    (async function boot(){
+      await setRatioFromFirst();
+      renderStatic();
+      loading.style.display = 'none';
+      syncFS();
+    })();
+  </script>
+</body>
+</html>
