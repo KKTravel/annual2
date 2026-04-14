@@ -9,15 +9,14 @@
     :root{
       --bg:#f2f2f2;
       --pad:14px;
-      --ratio: 0.7071;  /* 寬/高；載入P00後自動更新 */
+      --ratio: 0.7071;  /* 寬/高：會用 P00 自動更新 */
 
       --r: 14px;
       --shadow: 0 18px 55px rgba(0,0,0,.18);
-      --border: 1px solid rgba(0,0,0,.10);
 
-      --stackX: 0px;
-      --stackY: 0px;
-      --stackScale: 1;
+      --stackX: 10px;
+      --stackY: 10px;
+      --stackScale: 0.985;
     }
 
     *{ box-sizing:border-box; }
@@ -38,6 +37,9 @@
       background: var(--bg);
       z-index: 99999;
       color:#333;
+      padding: 18px;
+      text-align:center;
+      white-space: pre-line;
     }
 
     #app{
@@ -46,6 +48,7 @@
       position:relative;
     }
 
+    /* 工具列 */
     #toolbar{
       position: fixed;
       top: calc(12px + env(safe-area-inset-top));
@@ -70,6 +73,7 @@
     }
     #btnExit{ display:none; }
 
+    /* 頁碼 */
     #pager{
       position: fixed;
       left: calc(12px + env(safe-area-inset-left));
@@ -85,15 +89,17 @@
       user-select: none;
     }
 
+    /* 舞台 */
     #stage{
       position:absolute;
       inset:0;
       display:grid;
       place-items:center;
       padding: var(--pad);
-      touch-action: none;
+      touch-action: none; /* 防止拖曳時被瀏覽器手勢搶走 */
     }
 
+    /* 牌堆尺寸：用高度推回寬度 */
     #deck{
       height: calc(100svh - (var(--pad) * 2));
       width: min(
@@ -109,30 +115,33 @@
       inset:0;
       border-radius: var(--r);
       overflow:hidden;
-      background:transparent;
-      border: var(--border);
+      background: transparent; /* 去白邊 */
+      border: 0;
       box-shadow: var(--shadow);
       transform-origin: center;
-      will-change: transform, opacity;
+      will-change: transform, opacity, filter;
     }
     .card img{
       width:100%;
       height:100%;
       object-fit: contain;
       display:block;
-      background:transparent;
+      background: transparent; /* 去白邊 */
       pointer-events:none;
     }
 
+    /* under：下一頁保持 100% 大小（避免“下一頁放大一段”） */
     .card.under{
-      box-shadow: 0 10px 30px rgba(0,0,0,.12);
-      transform: translate(var(--stackX), var(--stackY)) scale(var(--stackScale));
-      opacity: 0.95;
+      transform: translate(0,0) scale(1);
+      opacity: 1;
+      box-shadow: 0 14px 44px rgba(0,0,0,.14);
     }
+
+    /* under2：疊牌 */
     .card.under2{
-      transform: translate(calc(var(--stackX) * 2), calc(var(--stackY) * 2)) scale(calc(var(--stackScale) - 0.01));
+      transform: translate(var(--stackX), var(--stackY)) scale(var(--stackScale));
       opacity: 0.85;
-      box-shadow: 0 8px 24px rgba(0,0,0,.10);
+      box-shadow: 0 10px 32px rgba(0,0,0,.10);
     }
 
     .card.top{
@@ -140,6 +149,10 @@
     }
     .card.top:active{
       cursor: grabbing;
+    }
+
+    @media (prefers-reduced-motion: reduce){
+      .card{ transition:none !important; }
     }
   </style>
 </head>
@@ -149,6 +162,7 @@
 
   <div id="app">
     <div id="toolbar">
+      <button id="btnHome" type="button">第一頁</button>
       <a id="pdfLink" href="#" target="_blank" rel="noopener noreferrer">PDF</a>
       <button id="btnFull" type="button">全螢幕</button>
       <button id="btnExit" type="button">退出</button>
@@ -157,7 +171,7 @@
     <div id="pager">1 / 36</div>
 
     <div id="stage">
-      <div id="deck"></div>
+      <div id="deck" aria-label="卡牌堆疊換頁"></div>
     </div>
   </div>
 
@@ -167,14 +181,17 @@
     const pageCount = 36; // P00~P35
     // ========================
 
-    const DURATION = 260; // ms
+    const DURATION = 260;   // 拖曳放手後動畫時間
+    const HOME_STEP_MS = 60; // 方案A：回第一頁速度（越細越快，40~90 建議）
 
     const pages = Array.from({length: pageCount}, (_, i) => `assets/P${String(i).padStart(2,'0')}.jpg`);
 
     const loading = document.getElementById('loading');
     const deck = document.getElementById('deck');
     const pager = document.getElementById('pager');
+
     const pdfLink = document.getElementById('pdfLink');
+    const btnHome = document.getElementById('btnHome');
     const btnFull = document.getElementById('btnFull');
     const btnExit = document.getElementById('btnExit');
     const app = document.getElementById('app');
@@ -184,6 +201,7 @@
     let idx = 0;
     let animating = false;
     let dragging = false;
+    let homeTimer = null;
 
     const elUnder2 = makeCard('under2');
     const elUnder  = makeCard('under');
@@ -203,7 +221,6 @@
     }
     function setSrc(el, src){ el.querySelector('img').src = src; }
     function clamp(n,a,b){ return Math.max(a, Math.min(b,n)); }
-
     function setPager(){ pager.textContent = `${idx+1} / ${pageCount}`; }
 
     function preload(i){
@@ -213,17 +230,21 @@
     }
 
     async function setRatioFromFirst(){
-      await new Promise((resolve)=>{
-        const im = new Image();
-        im.onload = ()=> {
-          if (im.naturalWidth && im.naturalHeight){
-            document.documentElement.style.setProperty('--ratio', (im.naturalWidth/im.naturalHeight).toString());
-          }
-          resolve();
-        };
-        im.onerror = ()=>resolve();
-        im.src = pages[0];
-      });
+      // 讀唔到都唔會卡死（2秒超時）
+      await Promise.race([
+        new Promise((resolve)=>{
+          const im = new Image();
+          im.onload = ()=> {
+            if (im.naturalWidth && im.naturalHeight){
+              document.documentElement.style.setProperty('--ratio', (im.naturalWidth/im.naturalHeight).toString());
+            }
+            resolve();
+          };
+          im.onerror = ()=> resolve();
+          im.src = pages[0];
+        }),
+        new Promise(resolve => setTimeout(resolve, 2000))
+      ]);
     }
 
     function renderStatic(){
@@ -234,24 +255,21 @@
       elTop.style.transition = 'none';
       elTop.style.transform = 'translate(0px,0px) rotate(0deg)';
       elTop.style.opacity = '1';
+      elTop.style.filter = 'none';
 
       elUnder.style.transition = 'none';
       elUnder2.style.transition = 'none';
-      elUnder.style.opacity = '0.95';
-      elUnder2.style.opacity = '0.85';
 
       setPager();
       preload(idx+1); preload(idx+2); preload(idx-1); preload(idx-2);
     }
 
-    // ========== 動畫：從「當前拖曳位置」續播 ==========
-    function finishNextFrom(dx){
+    // Next：當前頁划走
+    function finishNextFromCurrent(){
       if (animating || idx >= pageCount-1) return;
       animating = true;
 
       const w = deck.clientWidth || 1;
-
-      // top 已在你拖的位置，直接續播到左側飛出
       elTop.style.transition = `transform ${DURATION}ms ease, opacity ${DURATION}ms ease`;
       elTop.style.transform  = `translate(${-w*1.15}px, -10px) rotate(-10deg)`;
       elTop.style.opacity = '0';
@@ -263,12 +281,11 @@
       }, DURATION + 20);
     }
 
-    function finishPrevFrom(dx){
+    // Prev：上一頁返回來接住
+    function finishPrevToCenter(){
       if (animating || idx <= 0) return;
       animating = true;
 
-      // prev 手勢：top 是上一頁，且已從左側被你拉出一段
-      // 直接續播到中心 (0,0)
       elTop.style.transition = `transform ${DURATION}ms ease`;
       elTop.style.transform  = 'translate(0px,0px) rotate(0deg)';
 
@@ -286,13 +303,12 @@
 
     function bounceBackPrev(){
       const w = deck.clientWidth || 1;
-      // 把上一頁滑回左側外面，然後回復靜態（顯示當前頁）
       elTop.style.transition = `transform 200ms ease`;
       elTop.style.transform  = `translate(${-w*1.15}px, -10px) rotate(-10deg)`;
       setTimeout(()=> renderStatic(), 210);
     }
 
-    // ========== 拖曳交互 ==========
+    // 拖曳
     let startX = 0, startY = 0;
     let mode = null; // 'next' | 'prev'
     let lastDx = 0;
@@ -304,18 +320,18 @@
       const w = deck.clientWidth || 1;
 
       if (mode === 'next'){
-        // top=當前、under=下一頁
         setSrc(elTop, pages[idx]);
         setSrc(elUnder, pages[Math.min(idx+1, pageCount-1)]);
         setSrc(elUnder2, pages[Math.min(idx+2, pageCount-1)]);
         elTop.style.opacity = '1';
+        elTop.style.filter = 'none';
         elTop.style.transform = 'translate(0px,0px) rotate(0deg)';
       } else if (mode === 'prev'){
-        // under=當前；top=上一頁（放在左側外面等你拉回來）
         setSrc(elUnder, pages[idx]);
         setSrc(elUnder2, pages[Math.min(idx+1, pageCount-1)]);
         setSrc(elTop, pages[Math.max(idx-1, 0)]);
         elTop.style.opacity = '1';
+        elTop.style.filter = 'none';
         elTop.style.transform = `translate(${-w*1.15}px, -10px) rotate(-10deg)`;
       }
     }
@@ -331,30 +347,26 @@
       } else if (mode === 'prev'){
         const offLeft = -w * 1.15;
         const x = clamp(offLeft + dx, offLeft, 0);
-        const t = 1 - Math.abs(x / offLeft); // 0..1
+        const t = 1 - Math.abs(x / offLeft);
         const rot = (-10) * (1 - t);
         elTop.style.transform = `translate(${x}px, -10px) rotate(${rot}deg)`;
       }
     }
 
+    // 左右側點擊：左1/3 prev，右1/3 next
     function sideTap(clientX){
-      // 左1/3 prev, 右1/3 next, 中間不動
       const rect = deck.getBoundingClientRect();
       const x = clientX - rect.left;
       const w = rect.width;
 
-      // 點擊翻頁一樣要「順暢」，這裡直接做“無拖曳起點”的完成動畫
-      if (x < w * 0.33) {
-        // prev：上一頁從左進來
-        if (idx <= 0 || animating) return;
-        const ww = deck.clientWidth || 1;
+      if (x < w * 0.33){
+        if (idx <= 0 || animating || dragging) return;
         setMode('prev');
-        // 讓它從左側外面開始，直接進場到中心
-        requestAnimationFrame(() => finishPrevFrom(999));
-      } else if (x > w * 0.67) {
-        if (idx >= pageCount-1 || animating) return;
+        requestAnimationFrame(()=> finishPrevToCenter());
+      } else if (x > w * 0.67){
+        if (idx >= pageCount-1 || animating || dragging) return;
         setMode('next');
-        requestAnimationFrame(() => finishNextFrom(-999));
+        requestAnimationFrame(()=> finishNextFromCurrent());
       }
     }
 
@@ -377,7 +389,6 @@
       const dx = e.clientX - startX;
       lastDx = dx;
 
-      // 邊界：第一頁不能prev、最後一頁不能next（橡皮筋）
       if (dx > 0 && idx <= 0){
         setMode('next');
         applyDrag(dx * 0.25);
@@ -403,8 +414,7 @@
       const dx = lastDx;
       const dy = e.clientY - startY;
 
-      // 點擊（不是拖曳）
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10){
         sideTap(e.clientX);
         mode = null;
         return;
@@ -414,10 +424,10 @@
       const threshold = Math.min(180, w * 0.22);
 
       if (mode === 'next'){
-        if (dx <= -threshold) finishNextFrom(dx);
+        if (dx <= -threshold) finishNextFromCurrent();
         else bounceBackNext();
       } else if (mode === 'prev'){
-        if (dx >= threshold) finishPrevFrom(dx);
+        if (dx >= threshold) finishPrevToCenter();
         else bounceBackPrev();
       }
 
@@ -430,6 +440,38 @@
       mode = null;
     });
 
+    // ===== 方案A：超快逐頁回第一頁（最穩）=====
+    function rewindHomeFast(){
+      if (animating || dragging || idx === 0) return;
+
+      animating = true;
+      deck.style.pointerEvents = "none";
+
+      // 如果已經有 timer，先清掉
+      if (homeTimer) {
+        clearInterval(homeTimer);
+        homeTimer = null;
+      }
+
+      homeTimer = setInterval(() => {
+        if (idx <= 0) {
+          clearInterval(homeTimer);
+          homeTimer = null;
+
+          idx = 0;
+          renderStatic();
+          deck.style.pointerEvents = "";
+          animating = false;
+          return;
+        }
+
+        idx--;
+        renderStatic();
+      }, HOME_STEP_MS);
+    }
+
+    btnHome.addEventListener('click', rewindHomeFast);
+
     // 全螢幕
     function syncFS(){
       const on = !!document.fullscreenElement;
@@ -437,20 +479,28 @@
       btnExit.style.display = on ? 'inline-block' : 'none';
     }
     btnFull.addEventListener('click', async ()=>{
-      try{ await app.requestFullscreen(); }catch(e){
-        alert("全螢幕被阻擋（若在 iframe 內需 allowfullscreen/allow='fullscreen'）。");
-      }
+      try{ await app.requestFullscreen(); }
+      catch(e){ alert("全螢幕被阻擋（若在 iframe 內需 allowfullscreen / allow='fullscreen'）。"); }
     });
     btnExit.addEventListener('click', async ()=>{
       try{ if (document.fullscreenElement) await document.exitFullscreen(); }catch(e){}
     });
     document.addEventListener('fullscreenchange', syncFS);
 
+    // 防止任何 error 導致永遠卡 loading
+    window.addEventListener("error", (e) => {
+      loading.style.display = "flex";
+      loading.textContent = "載入失敗：\n" + (e.message || "unknown error");
+    });
+
     (async function boot(){
-      await setRatioFromFirst();
-      renderStatic();
-      loading.style.display = 'none';
-      syncFS();
+      try{
+        await setRatioFromFirst();
+        renderStatic();
+      } finally {
+        loading.style.display = 'none';
+        syncFS();
+      }
     })();
   </script>
 </body>
